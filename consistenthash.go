@@ -1,39 +1,80 @@
-package main
+package consistent
 
-import "crypto/md5"
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
 
-type HashRing struct {
-	numReplicas uint32
-	nodes       *LinkedList
-	items       []*HashRingItem
-	numNodes    uint32
-	numItems    uint32
-	hashFn      HashFunction
-}
-type HashRingNode struct {
-	name string
-}
-type HashRingItem struct {
-	node *HashRingNode
-	hash uint64
-}
-
-const (
-	HASH_FUNCTION_MD5 HashFunction = iota
-	HASH_FUNCTION_SHA1
+	hashfunc "github.com/minio/blake2b-simd"
 )
 
-type HashFunction int
-
-type LinkedList struct {
-	data interface{}
-	next *LinkedList
+type Host struct {
+	Name string
+	Load int64
 }
 
-func (ring *HashRing) Hash(data []byte) (uint64, error) {
-	return uint64(md5.Sum(data)), nil
+type Consistent struct {
+	hosts         map[uint64]string
+	sortedSet     []uint64
+	loadMap       map[string]*Host
+	replicaFactor uint16
+	totalLoad     int64
+
+	sync.RWMutex
 }
 
-func (ring *HashRing) AddNode(name string) error {
+func New() *Consistent {
+	return &Consistent{
+		hosts:         map[uint64]string{},
+		sortedSet:     []uint64{},
+		loadMap:       map[string]*Host{},
+		replicaFactor: 20,
+	}
+}
 
+func (c *Consistent) Add(host string) {
+	c.Lock()
+	defer c.Unlock()
+
+	c.loadMap[host] = &Host{Name: host, Load: 0}
+	for i := 0; i < int(c.replicaFactor); i++ {
+		h := c.hash(fmt.Sprintf("%s%i", host, i))
+		c.hosts[h] = host
+		c.sortedSet = append(c.sortedSet, h)
+	}
+	sort.Slice(c.sortedSet, func(i, j int) bool {
+		if c.sortedSet[i] < c.sortedSet[j] {
+			return true
+		}
+		return false
+	})
+}
+
+func (c *Consistent) Get(key string) (string, error) {
+	c.RLock()
+	defer c.RUnlock()
+
+	if len(c.hosts) == 0 {
+		return "", errors.New("no hosts added")
+	}
+	h := c.hash(key)
+	idx := c.search(h)
+	return c.hosts[c.sortedSet[idx]], nil
+}
+
+func (c *Consistent) search(key uint64) int {
+	idx := sort.Search(len(c.hosts), func(i int) bool {
+		return c.sortedSet[i] >= key
+	})
+	if idx >= len(c.sortedSet) {
+		idx = 0
+	}
+	return idx
+}
+
+func (c *Consistent) hash(key string) uint64 {
+	out := hashfunc.Sum512([]byte(key))
+	return binary.LittleEndian.Uint64(out[:])
 }
