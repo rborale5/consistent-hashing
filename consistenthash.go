@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 
@@ -25,7 +26,15 @@ type Consistent struct {
 	sync.RWMutex
 }
 
+// func initFunc() {
+// 	router := mux.NewRouter()
+// 	router.Path("/prometheus").Handler(promhttp.Handler())
+// 	err := http.ListenAndServe(":9000", router)
+// 	log.Fatal(err)
+// }
+
 func New() *Consistent {
+	// initFunc()
 	return &Consistent{
 		hosts:         map[uint64]string{},
 		sortedSet:     []uint64{},
@@ -43,6 +52,7 @@ func (c *Consistent) Add(host string) {
 		h := c.hash(fmt.Sprintf("%s%i", host, i))
 		c.hosts[h] = host
 		c.sortedSet = append(c.sortedSet, h)
+		log.Printf("%d", h)
 	}
 	sort.Slice(c.sortedSet, func(i, j int) bool {
 		if c.sortedSet[i] < c.sortedSet[j] {
@@ -61,6 +71,7 @@ func (c *Consistent) Get(key string) (string, error) {
 	}
 	h := c.hash(key)
 	idx := c.search(h)
+
 	return c.hosts[c.sortedSet[idx]], nil
 }
 
